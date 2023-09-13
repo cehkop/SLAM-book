@@ -2,7 +2,12 @@
 #include <opencv2/highgui.hpp>
 #include "opencv2/imgproc.hpp"
 #include <opencv2/imgcodecs.hpp>
+#include <opencv2/calib3d.hpp>
+#include <opencv2/features2d.hpp>
 #include <iostream>
+
+#include <eigen3/Eigen/Dense>
+#include <nanoflann.hpp>
 
 
 using namespace cv;
@@ -15,13 +20,14 @@ void calculateCenterOfMass(
     const cv::Mat& image,
     cv::Point2d& centerOfMass);
 std::vector<cv::Point2d> detectWhitePoints(const cv::Mat& image);
+int point_matching(std::vector<cv::Point2d>& points_ptr, std::vector<cv::Point3d>& map);
 
 
 int main(int, char**)
 {
-    Mat image_cap = imread("img.png");
-
-    double* ptr_;
+    Mat image_cap = imread("img4.png");
+    std::vector<cv::Point3d> map {{0.2,0,3}, {0.35,0,3}, {0.75,0,3},
+                                  {0,0.2,3}, {0,0.35,3}, {0,0.75,3}};
 
     std::shared_ptr<std::vector<cv::Point2d>> detect_point = 
             std::make_shared<std::vector<cv::Point2d>>(
@@ -33,6 +39,75 @@ int main(int, char**)
 	}
     imshow("frame", image_cap);
     waitKey(0);
+
+    point_matching(*points_ptr, map);
+
+    cout<<"end"<<endl;
+    return 0;
+}
+
+int point_matching(std::vector<cv::Point2d>& points_ptr, std::vector<cv::Point3d>& map)
+{
+    // for(const auto& point : map ){ cout<<point<<endl;}
+
+    cv::Mat rvec;
+    cv::Mat tvec;
+    cv::Mat camera_matrix;
+    cv::Mat dist;
+
+    dist = cv::Mat::zeros(5, 1, CV_64F);
+    rvec = cv::Mat::zeros(3, 1, CV_64F);
+    // rvec.at<double>(1) = -atan(1)*4;
+    tvec = cv::Mat::zeros(3, 1, CV_64F);
+    camera_matrix = cv::Mat::zeros(3, 3, CV_64F);
+
+    camera_matrix.at<double>(0,0) = 1169;
+    camera_matrix.at<double>(0,2) = 800;
+    camera_matrix.at<double>(1,1) = 1169;
+    camera_matrix.at<double>(1,2) = 540;
+    camera_matrix.at<double>(2,2) = 1;
+
+    std::vector<cv::Point2d> projected;
+    // cout<<camera_matrix<<endl;
+
+    cv::projectPoints(map, rvec, tvec, 
+                      camera_matrix, dist, projected);
+
+    cout<<projected<<endl;
+
+
+    cv::Mat mat1 = cv::Mat(projected.size(),2,CV_32F,projected.data());
+    cv::Mat mat2 = cv::Mat(points_ptr.size(),2,CV_32F,points_ptr.data());
+
+
+    // cv::BFMatcher matcher(cv::NORM_L2, true);
+    // std::vector<cv::DMatch> matches;
+    // matcher.match(mat1,mat2,matches);
+
+    nanoflann::KDTreeEigenMatrixAdaptor<Eigen::MatrixXd> mat_index(projected, 10);
+    mat_index.index->buildIndex();
+
+    vector<double> query_pt(points2D.data(), points2D.data() + points2D.size());
+    vector<size_t> ret_index(1);
+    vector<double> out_dist_sqr(1);
+
+    KNNResultSet<double> resultSet(1);
+    resultSet.init(&ret_index[0], &out_dist_sqr[0]);
+    mat_index.index->findNeighbors(resultSet, &query_pt[0], SearchParams(10));
+
+    double total_dist = accumulate(out_dist_sqr.begin(), out_dist_sqr.end(), 0.0) / out_dist_sqr.size();
+
+
+
+    // for (const auto& match : matches) {
+    //     cout<<matches<<endl;
+	// }
+
+    // cout<<matches<<endl;
+
+
+
+
     return 0;
 }
 
@@ -42,28 +117,15 @@ void calculateCenterOfMass(
     const cv::Mat& image,
     cv::Point2d& centerOfMass) {
 
-
     int e = 2;
     int xmax = topRight.x + e;
     int ymax = topRight.y + e;
     int xmin = bottomLeft.x - e;
     int ymin = bottomLeft.y - e;
-    // std::cout<<xmax<<std::endl;
-    // std::cout<<ymax<<std::endl;
-    // std::cout<<xmin<<std::endl;
-    // std::cout<<ymin<<std::endl;
-    // cv::Mat gray_image;
-	// cv::cvtColor(image, gray_image, cv::COLOR_BGR2GRAY);
-    // imshow("gray", gray_image);
-    // waitKey(0);
-    // cv::drawContours(image, {xmax, ymax, xmin, ymin});
-    cv::circle(image, cv::Point2d(xmax, ymax), 1, cv::Scalar(0, 255, 0), cv::FILLED);
-    cv::circle(image, cv::Point2d(xmin, ymax), 1, cv::Scalar(0, 255, 0), cv::FILLED);
-    cv::circle(image, cv::Point2d(xmax, ymin), 1, cv::Scalar(0, 255, 0), cv::FILLED);
-    cv::circle(image, cv::Point2d(xmin, ymin), 1, cv::Scalar(0, 255, 0), cv::FILLED);
-
-
-
+    // cv::circle(image, cv::Point2d(xmax, ymax), 1, cv::Scalar(0, 255, 0), cv::FILLED);
+    // cv::circle(image, cv::Point2d(xmin, ymax), 1, cv::Scalar(0, 255, 0), cv::FILLED);
+    // cv::circle(image, cv::Point2d(xmax, ymin), 1, cv::Scalar(0, 255, 0), cv::FILLED);
+    // cv::circle(image, cv::Point2d(xmin, ymin), 1, cv::Scalar(0, 255, 0), cv::FILLED);
 
     double totalMass = 0;
     double sumX = 0;
@@ -74,61 +136,38 @@ void calculateCenterOfMass(
     {
         for (int y = ymin; y < ymax; ++y)
         {
-
-            // std::cout<<"x = "<<x<<"    y = "<<y<<endl;
-            // cv::Mat new_img;
-            // image.copyTo(new_img);
-
-            // cv::circle(new_img, cv::Point2d(x, y), 1, cv::Scalar(0, 0, 255), cv::FILLED);
             cv::Vec3b point = image.at<Vec3b>(y,x);
-            // Point3_<uchar>& p = *image.ptr<Point3_<uchar> >(y,x);
-
-            // std::cout << "Test_point = " << point << std::endl;
             double point_avg = (double)((point[0]+point[1]+point[2])/3);
-            // image.at<Vec3b>(x,y) = {0,0,255};
             double mass = point_avg;
             totalMass += mass;
             sumX += mass * x;
             sumY += mass * y;
-            // cv::imshow("test_point", new_img);
-            // cv::waitKey(0);
 
         }
     }
     if (totalMass == 0) {
         // return {0, 0};  // Return an arbitrary point for an empty matrix
     }
-    std::cout<<"sumX = "<<sumX<<std::endl;
-    std::cout<<"totalMass = "<<totalMass<<std::endl;
+    // std::cout<<"sumX = "<<sumX<<std::endl;
+    // std::cout<<"totalMass = "<<totalMass<<std::endl;
 
     double centerX = sumX / totalMass;
     double centerY = sumY / totalMass;
 
-    // std::cout<<"X = "<<centerX<<std::endl;
-    // std::cout<<"Y = "<<centerY<<std::endl;
     centerOfMass.x = centerX;
     centerOfMass.y = centerY;
-    // std::cout<<"end"<<endl;
 }
 
 std::vector<cv::Point2d> detectWhitePoints(const cv::Mat& image) {
-    std::cout<<"start"<<endl;
-    // std::vector<cv::Point2d> out;
-    // return out;
-
-
+    // std::cout<<"start"<<endl;
 	cv::Mat grayImage;
 	cv::cvtColor(image, grayImage, cv::COLOR_BGR2GRAY);
 
 	cv::Mat binaryImage;
 	cv::threshold(grayImage, binaryImage, 0, 255, cv::THRESH_BINARY | cv::THRESH_OTSU);
-	// ����� �������� �� �������������� �����������
 	std::vector<std::vector<cv::Point>> contours;
 	cv::findContours(binaryImage, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-
 	std::vector<cv::Point2d> centers;
-    // std::cout<<"start"<<endl;
-
 
 	for (const auto& contour : contours) {
         if (cv::contourArea(contour) < 5)
@@ -138,41 +177,12 @@ std::vector<cv::Point2d> detectWhitePoints(const cv::Mat& image) {
         cv::Point2d topRight = { (double)boundingRect.x + (double)boundingRect.width, 
                                  (double)boundingRect.y + (double)boundingRect.height };
         cv::Point2d bottomLeft = { (double)boundingRect.x, (double)boundingRect.y };
-        // std::cout<<"start"<<endl;
 
-        // Вычисляем центр масс контура точки
         cv::Point2d centerOfMass;
         calculateCenterOfMass(topRight, bottomLeft, image, centerOfMass);
 		// std::cout<<centerOfMass<<std::endl;
 		centers.push_back(centerOfMass);
 	}
-    // std::cout<<"end"<<endl;
-
 	std::cout<<centers<<std::endl;
-
-	std::vector<cv::Rect> boundingRectangles;
-	for (const auto& contour : contours) {
-		cv::Rect boundingRect = cv::boundingRect(contour);
-		boundingRectangles.push_back(boundingRect);
-	}
-    // std::cout<<"start"<<endl;
-
-	std::vector<cv::Rect> mergedRectangles = boundingRectangles;
-
-	std::vector<cv::Point2d> centers_;
-
-	for (const auto& rect : mergedRectangles) {
-		cv::Point2d center(rect.x + rect.width / 2.0f, rect.y + rect.height / 2.0f);
-		if(
-            center.x < 1400 and center.y < 1100
-            and
-            center.x > 200 and center.y > 200
-        )
-        {
-			centers_.push_back(center);
-		}
-	}
-
-	std::cout<<centers_<<std::endl;
 	return centers;
 }
