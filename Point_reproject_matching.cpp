@@ -23,29 +23,50 @@ std::vector<cv::Point2d> detectWhitePoints(const cv::Mat& image);
 int point_matching(std::vector<cv::Point2d>& points_ptr, std::vector<cv::Point3d>& map);
 
 
-int main(int, char**)
+template <typename T>
+struct PointCloud
 {
-    Mat image_cap = imread("img4.png");
-    std::vector<cv::Point3d> map {{0.2,0,3}, {0.35,0,3}, {0.75,0,3},
-                                  {0,0.2,3}, {0,0.35,3}, {0,0.75,3}};
+    struct Point
+    {
+        T x, y, z;
+    };
 
-    std::shared_ptr<std::vector<cv::Point2d>> detect_point = 
-            std::make_shared<std::vector<cv::Point2d>>(
-                detectWhitePoints(image_cap)
-                );
-    std::vector<cv::Point2d>* points_ptr = detect_point.get();
-    for (const auto& point : *points_ptr) {
-		cv::circle(image_cap, point, 2, cv::Scalar(0, 0, 255), cv::FILLED);
-	}
-    imshow("frame", image_cap);
-    waitKey(0);
+    using coord_t = T;  //!< The type of each coordinate
 
-    point_matching(*points_ptr, map);
+    std::vector<Point> pts;
 
-    cout<<"end"<<endl;
-    return 0;
-}
+    // Must return the number of data points
+    inline size_t kdtree_get_point_count() const { return pts.size(); }
 
+    // Returns the dim'th component of the idx'th point in the class:
+    // Since this is inlined and the "dim" argument is typically an immediate
+    // value, the
+    //  "if/else's" are actually solved at compile time.
+    inline T kdtree_get_pt(const size_t idx, const size_t dim) const
+    {
+        if (dim == 0)
+            return pts[idx].x;
+        else if (dim == 1)
+            return pts[idx].y;
+        else
+            return pts[idx].z;
+    }
+
+    // Optional bounding-box computation: return false to default to a standard
+    // bbox computation loop.
+    //   Return true if the BBOX was already computed by the class and returned
+    //   in "bb" so it can be avoided to redo it again. Look at bb.size() to
+    //   find out the expected dimensionality (e.g. 2 or 3 for point clouds)
+    template <class BBOX>
+    bool kdtree_get_bbox(BBOX& /* bb */) const
+    {
+        return false;
+    }
+};
+
+
+
+template <typename num_t>
 int point_matching(std::vector<cv::Point2d>& points_ptr, std::vector<cv::Point3d>& map)
 {
     // for(const auto& point : map ){ cout<<point<<endl;}
@@ -75,27 +96,68 @@ int point_matching(std::vector<cv::Point2d>& points_ptr, std::vector<cv::Point3d
 
     cout<<projected<<endl;
 
+    
+    using matrix_t = Eigen::Matrix<double, 6, 2>;
+    // matrix_t mat1(6, 2);
+    // matrix_t mat2(6, 2);
+    Eigen::Matrix<double, 6, 2> mat1;
+    Eigen::Matrix<double, 6, 2> mat2;
+    
+    // mat1 << projected.data();
+    // Eigen::Matrix<double, 6, 2> mat2;
+    // mat1 << projected;
+    mat1(0,0) = projected.data()[0].x;
+    mat1(0,1) = projected.data()[0].y;
+    mat1(1,0) = projected.data()[1].x;
+    mat1(1,1) = projected.data()[1].y;
+    mat1(2,0) = projected.data()[2].x;
+    mat1(2,1) = projected.data()[2].y;
+    mat1(3,0) = projected.data()[3].x;
+    mat1(3,1) = projected.data()[3].y;
+    mat1(4,0) = projected.data()[4].x;
+    mat1(4,1) = projected.data()[4].y;
+    mat1(5,0) = projected.data()[5].x;
+    mat1(5,1) = projected.data()[5].y;
+    // mat1[1] << 2;
+    // mat1[2] << 3;
+    cout<<mat1<<endl;
 
-    cv::Mat mat1 = cv::Mat(projected.size(),2,CV_32F,projected.data());
-    cv::Mat mat2 = cv::Mat(points_ptr.size(),2,CV_32F,points_ptr.data());
+    mat2(0,0) = points_ptr.data()[0].x;
+    mat2(0,1) = points_ptr.data()[0].y;
+    mat2(1,0) = points_ptr.data()[1].x;
+    mat2(1,1) = points_ptr.data()[1].y;
+    mat2(2,0) = points_ptr.data()[2].x;
+    mat2(2,1) = points_ptr.data()[2].y;
+    mat2(3,0) = points_ptr.data()[3].x;
+    mat2(3,1) = points_ptr.data()[3].y;
+    mat2(4,0) = points_ptr.data()[4].x;
+    mat2(4,1) = points_ptr.data()[4].y;
+    mat2(5,0) = points_ptr.data()[5].x;
+    mat2(5,1) = points_ptr.data()[5].y;
+    cout<<mat2<<endl;
 
+    // const num_t max_range = 20;
 
-    // cv::BFMatcher matcher(cv::NORM_L2, true);
-    // std::vector<cv::DMatch> matches;
-    // matcher.match(mat1,mat2,matches);
+    using my_kd_tree_t = nanoflann::KDTreeSingleIndexAdaptor<
+        nanoflann::L2_Simple_Adaptor<
+            num_t, Eigen::Matrix<double, 6, 2>>,
+        Eigen::Matrix<double, 6, 2>, 2 /* dim */
+        >;
+    my_kd_tree_t index(2, std::cref(mat1), 10 /* max leaf */);
 
-    nanoflann::KDTreeEigenMatrixAdaptor<Eigen::MatrixXd> mat_index(projected, 10);
-    mat_index.index->buildIndex();
+    // // do a knn search
+    const size_t        num_results = 1;
+    size_t                         ret_index;
+    num_t                          out_dist_sqr;
 
-    vector<double> query_pt(points2D.data(), points2D.data() + points2D.size());
-    vector<size_t> ret_index(1);
-    vector<double> out_dist_sqr(1);
+    nanoflann::KNNResultSet<num_t> resultSet(num_results);
 
-    KNNResultSet<double> resultSet(1);
-    resultSet.init(&ret_index[0], &out_dist_sqr[0]);
-    mat_index.index->findNeighbors(resultSet, &query_pt[0], SearchParams(10));
+    resultSet.init(&ret_index, &out_dist_sqr);
+    num_t query_pt[3] = {0.5, 0.5, 0.5};
+    index.findNeighbors(resultSet, &query_pt[0]);
 
-    double total_dist = accumulate(out_dist_sqr.begin(), out_dist_sqr.end(), 0.0) / out_dist_sqr.size();
+    std::cout << "knnSearch(nn=" << num_results << "): \n";
+
 
 
 
@@ -110,6 +172,31 @@ int point_matching(std::vector<cv::Point2d>& points_ptr, std::vector<cv::Point3d
 
     return 0;
 }
+
+
+int main(int, char**)
+{
+    Mat image_cap = imread("img4.png");
+    std::vector<cv::Point3d> map {{0.2,0,3}, {0.35,0,3}, {0.75,0,3},
+                                  {0,0.2,3}, {0,0.35,3}, {0,0.75,3}};
+
+    std::shared_ptr<std::vector<cv::Point2d>> detect_point = 
+            std::make_shared<std::vector<cv::Point2d>>(
+                detectWhitePoints(image_cap)
+                );
+    std::vector<cv::Point2d>* points_ptr = detect_point.get();
+    for (const auto& point : *points_ptr) {
+		cv::circle(image_cap, point, 2, cv::Scalar(0, 0, 255), cv::FILLED);
+	}
+    // imshow("frame", image_cap);
+    // waitKey(0);
+
+    point_matching<float>(*points_ptr, map);
+
+    cout<<"end"<<endl;
+    return 0;
+}
+
 
 void calculateCenterOfMass(
     const cv::Point2d& topRight, 
